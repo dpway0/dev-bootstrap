@@ -9,7 +9,7 @@ Automated provisioning script for a high-performance Rust development environmen
 Run the following command inside your Ubuntu VM:
 
 ```bash
-bash <(curl -s [https://raw.githubusercontent.com/dpway0/dev-bootstrap/main/orbstack/rust-backend/setup.sh](https://raw.githubusercontent.com/dpway0/dev-bootstrap/main/orbstack/rust-backend/setup.sh))
+bash <(curl -s https://raw.githubusercontent.com/dpway0/dev-bootstrap/main/orbstack/rust-backend/setup.sh)
 
 ```
 
