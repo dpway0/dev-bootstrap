@@ -8,7 +8,7 @@
 
 set -e
 
-# --- Visual Helpers (The Pro Look) ---
+# --- Visual Helpers ---
 BOLD='\033[1m'
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -16,7 +16,7 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
-# Hàm logging chuyên nghiệp
+# --- Logging ---
 log_step() {
     echo -e "\n${BLUE}${BOLD}[STEP $1]$2${NC}"
 }
@@ -41,13 +41,13 @@ log_error() {
 echo -e "${BOLD}Starting Rust Backend Environment Setup for Orbstack...${NC}"
 echo -e "--------------------------------------------------------"
 
-# 1. System Dependencies
+# 1. System Dependencies & Repositories
 # ------------------------------------------------------------------------------
 log_step "1/6" " System Dependencies & Repositories"
 
 log_info "Updating apt package lists..."
 if ! sudo apt-get update -y > /dev/null 2>&1; then
-    log_warn "Apt update failed (Hash Sum Mismatch?). Attempting fix..."
+    log_warn "Apt update failed. Attempting fix..."
     sudo rm -rf /var/lib/apt/lists/*
     sudo apt-get clean
     sudo apt-get update -y > /dev/null 2>&1
@@ -56,20 +56,26 @@ else
     log_success "Apt updated successfully."
 fi
 
-log_info "Adding PPAs (Helix Editor)..."
-sudo apt-get install -y software-properties-common > /dev/null 2>&1
+log_info "Adding PPAs (Helix & GitHub CLI)..."
+sudo apt-get install -y software-properties-common curl > /dev/null 2>&1
 sudo add-apt-repository ppa:maveonair/helix-editor -y > /dev/null 2>&1
+
+# --- Add Repo GitHub CLI ---
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg > /dev/null 2>&1
+sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg > /dev/null 2>&1
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null 2>&1
+
 sudo apt-get update -y > /dev/null 2>&1
 
-log_info "Installing core libraries (Build-essential, Clang, Mold, LibPQ)..."
+log_info "Installing core libraries, Helix & gh cli..."
 sudo apt-get install -y \
     build-essential curl git unzip \
     pkg-config libssl-dev \
     clang lld mold \
     libpq-dev postgresql-client \
-    helix > /dev/null 2>&1
+    helix gh > /dev/null 2>&1
 
-log_success "System libraries & Helix installed."
+log_success "System libraries, Helix & GitHub CLI installed."
 
 # 2. Rust Toolchain
 # ------------------------------------------------------------------------------
@@ -104,7 +110,6 @@ fi
 log_step "4/6" " Installing 'Pro' Rust Tools"
 log_info "This might take a moment (installing binaries)..."
 
-# List tools explicitly so user knows what's happening
 TOOLS="cargo-watch cargo-edit zellij atuin starship zoxide bottom xh gitui git-delta git-cliff fd-find ripgrep eza du-dust bat"
 
 if cargo binstall -y $TOOLS > /dev/null 2>&1; then
@@ -129,7 +134,7 @@ linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 EOF
 
-log_info "Configuring Git (Delta + Rebase workflow)..."
+log_info "Configuring Git (Delta + Rebase + gh auth)..."
 git config --global core.pager "delta"
 git config --global interactive.diffFilter "delta --color-only"
 git config --global delta.navigate true
@@ -139,13 +144,19 @@ git config --global pull.rebase true
 git config --global rebase.autoStash true
 git config --global init.defaultBranch main
 
+# --- Set up gh as a credential helper for git ---
+if command -v gh &> /dev/null; then
+    gh auth setup-git
+    log_success "Git configured to use GitHub CLI for auth."
+fi
+
 log_info "Configuring Helix (Theme)..."
 mkdir -p "$HOME/.config/helix"
 if [ ! -f "$HOME/.config/helix/config.toml" ]; then
     echo 'theme = "dracula"' > "$HOME/.config/helix/config.toml"
 fi
 
-log_info "Downloading bash-preexec (Required for Atuin on Bash)..."
+log_info "Downloading bash-preexec (Required for Atuin)..."
 curl -s https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
 
 log_info "Injecting aliases into .bashrc..."
@@ -180,7 +191,6 @@ else
 fi
 
 # Interactive Git Identity Setup
-# Check specifically if user email is missing
 if [ -z "$(git config --global user.email)" ]; then
     echo -e "\n${YELLOW}  ⚠ Git identity is not set.${NC}"
     read -p "    Enter Global Git Name: " git_name
@@ -207,8 +217,10 @@ log_success "System clean."
 echo -e "\n${GREEN}========================================================${NC}"
 echo -e "${GREEN}  ✔ SETUP COMPLETE! READY TO CODE.${NC}"
 echo -e "${GREEN}========================================================${NC}"
-echo -e "  • Shell:   Bash + Starship + Atuin + Zoxide"
-echo -e "  • Editor:  Helix (hx)"
-echo -e "  • Monitor: Bottom (btm)"
-echo -e "  • Git:     GitUI (gu)"
-echo -e "\n${BOLD}Action Required:${NC} Run ${BLUE}source ~/.bashrc${NC} to start."
+echo -e "  • Shell:    Bash + Starship + Atuin + Zoxide"
+echo -e "  • Editor:   Helix (hx)"
+echo -e "  • Git:      GitUI (gu) + GitHub CLI (gh)"
+echo -e "  • Linker:   Mold (Blazing fast)"
+echo -e "\n${BOLD}Action Required:${NC}"
+echo -e "  1. Run ${BLUE}source ~/.bashrc${NC} to refresh shell."
+echo -e "  2. Run ${BLUE}gh auth login${NC} to connect your GitHub account."
