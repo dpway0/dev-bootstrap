@@ -2,166 +2,203 @@
 
 # ==============================================================================
 # Rust Backend Environment Provisioning
-# Target: Ubuntu (Orbstack)
+# Target: Debian/Ubuntu
 # Author: dp
 # ==============================================================================
 
-set -e
+# --- Strict Mode ---
+set -euo pipefail
+IFS=$'\n\t'
 
-# --- Visual Helpers ---
-BOLD='\033[1m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+# --- Constants ---
+readonly BOLD='\033[1m'
+readonly GREEN='\033[0;32m'
+readonly BLUE='\033[0;34m'
+readonly YELLOW='\033[1;33m'
+readonly RED='\033[0;31m'
+readonly NC='\033[0m' # No Color
 
-# --- Logging ---
-log_step() {
-    echo -e "\n${BLUE}${BOLD}[STEP $1]$2${NC}"
+# --- Global Config ---
+INTERACTIVE=true
+VERBOSE=false
+
+# --- Error Handling ---
+trap 'err_handler $LINENO "$BASH_COMMAND"' ERR
+
+err_handler() {
+    local exit_code=$?
+    local line_no=$1
+    local command=$2
+    log_error "Command \"$command\" failed on line $line_no with exit code $exit_code"
+    exit "$exit_code"
 }
 
-log_info() {
-    echo -e "  ${BLUE}➜${NC} $1"
+# --- Logging Helpers ---
+log_step() { echo -e "\n${BLUE}${BOLD}[STEP $1]${NC} $2"; }
+log_info() { echo -e "  ${BLUE}➜${NC} $1"; }
+log_success() { echo -e "  ${GREEN}✔${NC} $1"; }
+log_warn() { echo -e "  ${YELLOW}⚠ WARNING:${NC} $1"; }
+log_error() { echo -e "  ${RED}✖ ERROR:${NC} $1" >&2; }
+
+# --- Utilities ---
+is_installed() { command -v "$1" &> /dev/null; }
+
+execute_cmd() {
+    local desc="$1"
+    local cmd="$2"
+
+    log_info "$desc"
+    if [ "$VERBOSE" = true ]; then
+        eval "$cmd"
+    else
+        # Capture stderr to a temp file so we can show it on error
+        local err_file
+        err_file=$(mktemp)
+        if ! eval "$cmd" > /dev/null 2> "$err_file"; then
+            local exit_code=$?
+            cat "$err_file" >&2
+            rm -f "$err_file"
+            return "$exit_code"
+        fi
+        rm -f "$err_file"
+    fi
+    log_success "Done."
 }
 
-log_success() {
-    echo -e "  ${GREEN}✔${NC} $1"
+# --- Steps ---
+
+check_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        case "$ID" in
+            ubuntu|debian|pop|mint|kali) ;;
+            *) log_warn "Detected OS ($ID) might not be fully supported. Proceeding anyway...";;
+        esac
+    else
+        log_error "Cannot detect OS. Only Debian/Ubuntu based systems are supported."
+        exit 1
+    fi
 }
 
-log_warn() {
-    echo -e "  ${YELLOW}⚠ WARNING:${NC} $1"
+install_sys_deps() {
+    log_step "1/7" "System Dependencies & Repositories"
+
+    execute_cmd "Updating apt package lists" "sudo apt-get update -y"
+
+    execute_cmd "Installing software-properties-common & curl" \
+        "sudo apt-get install -y software-properties-common curl"
+
+    if ! grep -q "ppa:maveonair/helix-editor" /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null; then
+        execute_cmd "Adding Helix PPA" "sudo add-apt-repository ppa:maveonair/helix-editor -y"
+    fi
+
+    if [ ! -f /usr/share/keyrings/githubcli-archive-keyring.gpg ]; then
+        execute_cmd "Adding GitHub CLI GPG key" \
+            "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg"
+    fi
+
+    if [ ! -f /etc/apt/sources.list.d/github-cli.list ]; then
+         execute_cmd "Adding GitHub CLI Repository" \
+            "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\" | sudo tee /etc/apt/sources.list.d/github-cli.list"
+    fi
+
+    execute_cmd "Updating apt again" "sudo apt-get update -y"
+
+    local DEPS="build-essential git unzip pkg-config libssl-dev clang lld mold libpq-dev postgresql-client helix gh wget"
+    execute_cmd "Installing core packages: $DEPS" "sudo apt-get install -y $DEPS"
 }
 
-log_error() {
-    echo -e "  ${RED}✖ ERROR:${NC} $1"
+install_rust_toolchain() {
+    log_step "2/7" "Rust Toolchain (Rustup)"
+
+    if ! is_installed rustc; then
+        execute_cmd "Installing Rust (stable)" "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+    else
+        execute_cmd "Updating Rust" "rustup update"
+    fi
+
+    # Ensure cargo is in path for the script session
+    export PATH="$HOME/.cargo/bin:$PATH"
 }
 
-# --- Start Setup ---
-echo -e "${BOLD}Starting Rust Backend Environment Setup for Orbstack...${NC}"
-echo -e "--------------------------------------------------------"
+install_cargo_binstall() {
+    log_step "3/7" "Cargo Binstall"
+    if ! is_installed cargo-binstall; then
+        execute_cmd "Installing cargo-binstall" \
+            "curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash"
+    else
+        log_success "cargo-binstall already installed."
+    fi
+}
 
-# 1. System Dependencies & Repositories
-# ------------------------------------------------------------------------------
-log_step "1/6" " System Dependencies & Repositories"
+install_pro_tools() {
+    log_step "4/7" "Installing 'Pro' Rust Tools"
+    
+    local TOOLS="cargo-watch cargo-edit zellij atuin starship zoxide bottom xh gitui git-delta git-cliff fd-find ripgrep eza du-dust bat"
+    
+    execute_cmd "Installing tools via binstall: $TOOLS" "cargo binstall -y $TOOLS"
+}
 
-log_info "Updating apt package lists..."
-if ! sudo apt-get update -y > /dev/null 2>&1; then
-    log_warn "Apt update failed. Attempting fix..."
-    sudo rm -rf /var/lib/apt/lists/*
-    sudo apt-get clean
-    sudo apt-get update -y > /dev/null 2>&1
-    log_success "Apt fixed and updated."
-else
-    log_success "Apt updated successfully."
-fi
+install_mise() {
+    log_step "5/7" "Mise (Runtime Manager)"
+    
+    if ! is_installed mise; then
+        execute_cmd "Installing Mise (via cargo-binstall)" "cargo binstall -y mise"
+    else
+        log_success "Mise is already installed."
+    fi
+}
 
-log_info "Adding PPAs (Helix & GitHub CLI)..."
-sudo apt-get install -y software-properties-common curl > /dev/null 2>&1
-sudo add-apt-repository ppa:maveonair/helix-editor -y > /dev/null 2>&1
+configure_environment() {
+    log_step "6/7" "Applying Configurations"
 
-# --- Add Repo GitHub CLI ---
-curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg > /dev/null 2>&1
-sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg > /dev/null 2>&1
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null 2>&1
-
-sudo apt-get update -y > /dev/null 2>&1
-
-log_info "Installing core libraries, Helix & gh cli..."
-sudo apt-get install -y \
-    build-essential curl git unzip \
-    pkg-config libssl-dev \
-    clang lld mold \
-    libpq-dev postgresql-client \
-    helix gh > /dev/null 2>&1
-
-log_success "System libraries, Helix & GitHub CLI installed."
-
-# 2. Rust Toolchain
-# ------------------------------------------------------------------------------
-log_step "2/6" " Rust Toolchain (Rustup)"
-
-if ! command -v rustc &> /dev/null; then
-    log_info "Installing Rust (Stable)..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y > /dev/null 2>&1
-    log_success "Rust installed."
-else
-    log_info "Rust already installed. Updating..."
-    rustup update > /dev/null 2>&1
-    log_success "Rust updated."
-fi
-
-source "$HOME/.cargo/env"
-
-# 3. Cargo Binstall
-# ------------------------------------------------------------------------------
-log_step "3/6" " Cargo Binstall (Fast Binary Installer)"
-
-if ! command -v cargo-binstall &> /dev/null; then
-    log_info "Fetching cargo-binstall..."
-    curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash > /dev/null 2>&1
-    log_success "cargo-binstall installed."
-else
-    log_success "cargo-binstall is already ready."
-fi
-
-# 4. Rust Productivity Tools
-# ------------------------------------------------------------------------------
-log_step "4/6" " Installing 'Pro' Rust Tools"
-log_info "This might take a moment (installing binaries)..."
-
-TOOLS="cargo-watch cargo-edit zellij atuin starship zoxide bottom xh gitui git-delta git-cliff fd-find ripgrep eza du-dust bat"
-
-if cargo binstall -y $TOOLS > /dev/null 2>&1; then
-    log_success "All Rust tools installed: $(echo $TOOLS | sed 's/ /, /g')"
-else
-    log_warn "Some tools might have failed to install. Check cargo logs."
-fi
-
-# 5. Configuration
-# ------------------------------------------------------------------------------
-log_step "5/6" " Applying Configurations"
-
-log_info "Configuring Mold Linker (Global Speedup)..."
-mkdir -p "$HOME/.cargo"
-cat > "$HOME/.cargo/config.toml" <<EOF
+    # Mold Linker
+    execute_cmd "Configuring Mold Linker" \
+        "mkdir -p \"$HOME/.cargo\" && \
+         cat > \"$HOME/.cargo/config.toml\" <<EOF
 [target.x86_64-unknown-linux-gnu]
-linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+linker = \"clang\"
+rustflags = [\"-C\", \"link-arg=-fuse-ld=mold\"]
 
 [target.aarch64-unknown-linux-gnu]
-linker = "clang"
-rustflags = ["-C", "link-arg=-fuse-ld=mold"]
-EOF
+linker = \"clang\"
+rustflags = [\"-C\", \"link-arg=-fuse-ld=mold\"]
+EOF"
 
-log_info "Configuring Git (Delta + Rebase + gh auth)..."
-git config --global core.pager "delta"
-git config --global interactive.diffFilter "delta --color-only"
-git config --global delta.navigate true
-git config --global delta.line-numbers true
-git config --global delta.side-by-side true
-git config --global pull.rebase true
-git config --global rebase.autoStash true
-git config --global init.defaultBranch main
+    # Git Config (Delta + Defaults)
+    execute_cmd "Configuring Git Global Defaults" \
+        "git config --global core.pager \"delta\" && \
+         git config --global interactive.diffFilter \"delta --color-only\" && \
+         git config --global delta.navigate true && \
+         git config --global delta.line-numbers true && \
+         git config --global delta.side-by-side true && \
+         git config --global pull.rebase true && \
+         git config --global rebase.autoStash true && \
+         git config --global init.defaultBranch main"
 
-# --- Set up gh as a credential helper for git ---
-if command -v gh &> /dev/null; then
-    gh auth setup-git
-    log_success "Git configured to use GitHub CLI for auth."
-fi
+    if is_installed gh; then
+        # This might need interaction if not logged in, but just setting config is safe
+        if ! git config credential.helper | grep -q "gh"; then
+             execute_cmd "Setting gh as git credential helper" "gh auth setup-git"
+        fi
+    fi
 
-log_info "Configuring Helix (Theme)..."
-mkdir -p "$HOME/.config/helix"
-if [ ! -f "$HOME/.config/helix/config.toml" ]; then
-    echo 'theme = "dracula"' > "$HOME/.config/helix/config.toml"
-fi
+    # Helix Config
+    if [ ! -f "$HOME/.config/helix/config.toml" ]; then
+        execute_cmd "Configuring Helix Theme" \
+            "mkdir -p \"$HOME/.config/helix\" && echo 'theme = \"dracula\"' > \"$HOME/.config/helix/config.toml\""
+    fi
 
-log_info "Downloading bash-preexec (Required for Atuin)..."
-curl -s https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh
+    # Bash Pre-exec
+    if [ ! -f "$HOME/.bash-preexec.sh" ]; then
+        execute_cmd "Downloading bash-preexec" \
+            "curl -s https://raw.githubusercontent.com/rcaloras/bash-preexec/master/bash-preexec.sh -o ~/.bash-preexec.sh"
+    fi
 
-log_info "Injecting aliases into .bashrc..."
-if ! grep -q "# --- Rust Dev Stack ---" ~/.bashrc; then
-    cat <<EOT >> ~/.bashrc
+    # Bashrc Injection
+    if ! grep -q "# --- Rust Dev Stack ---" ~/.bashrc; then
+        log_info "Injecting aliases into .bashrc..."
+        cat <<EOT >> ~/.bashrc
 
 # --- Rust Dev Stack (dp) ---
 HISTSIZE=1000000
@@ -169,58 +206,118 @@ HISTFILESIZE=20000000
 
 [[ -f ~/.bash-preexec.sh ]] && source ~/.bash-preexec.sh
 
-eval "\$(starship init bash)"
-eval "\$(atuin init bash)"
-eval "\$(zoxide init bash --cmd cd)"
+if command -v starship &> /dev/null; then eval "\$(starship init bash)"; fi
+if command -v atuin &> /dev/null; then eval "\$(atuin init bash)"; fi
+if command -v zoxide &> /dev/null; then eval "\$(zoxide init bash --cmd cd)"; fi
+if command -v mise &> /dev/null; then eval "\$(mise activate bash)"; fi
 
-alias cat="bat"
-alias ls="eza --icons"
-alias ll="eza -l --icons --git"
-alias tree="eza --tree --icons"
-alias find="fd"
-alias du="dust"
-alias gu="gitui"
-alias top="btm"
+if command -v bat &> /dev/null; then alias cat="bat"; fi
+if command -v eza &> /dev/null; then 
+    alias ls="eza --icons"
+    alias ll="eza -l --icons --git"
+    alias tree="eza --tree --icons"
+fi
+if command -v fd &> /dev/null; then alias find="fd"; fi
+if command -v dust &> /dev/null; then alias du="dust"; fi
+if command -v gitui &> /dev/null; then alias gu="gitui"; fi
+if command -v btm &> /dev/null; then alias top="btm"; fi
 alias vim="hx"
 alias vi="hx"
 alias zj="zellij"
 EOT
-    log_success "Bashrc updated."
-else
-    log_success "Bashrc already configured."
-fi
-
-# Interactive Git Identity Setup
-if [ -z "$(git config --global user.email)" ]; then
-    echo -e "\n${YELLOW}  ⚠ Git identity is not set.${NC}"
-    read -p "    Enter Global Git Name: " git_name
-    read -p "    Enter Global Git Email: " git_email
-
-    if [ -n "$git_name" ] && [ -n "$git_email" ]; then
-        git config --global user.name "$git_name"
-        git config --global user.email "$git_email"
-        log_success "Git identity configured."
+        log_success "Bashrc updated."
     else
-        log_warn "Skipped Git identity setup."
+         log_success "Bashrc already configured."
     fi
-fi
+}
 
-# 6. Cleanup
-# ------------------------------------------------------------------------------
-log_step "6/6" " Final Cleanup"
-log_info "Removing unused packages..."
-sudo apt-get autoremove -y > /dev/null 2>&1
-sudo apt-get clean > /dev/null 2>&1
-log_success "System clean."
+setup_git_identity() {
+    if [ "$INTERACTIVE" = false ]; then
+        log_info "Skipping interactive Git setup (Non-interactive mode)."
+        return
+    fi
+    
+    if [ -z "$(git config --global user.email)" ]; then
+        echo -e "\n${YELLOW}  ⚠ Git identity is not set.${NC}"
+        read -p "    Enter Global Git Name: " git_name
+        read -p "    Enter Global Git Email: " git_email
 
-# Final Summary
-echo -e "\n${GREEN}========================================================${NC}"
-echo -e "${GREEN}  ✔ SETUP COMPLETE! READY TO CODE.${NC}"
-echo -e "${GREEN}========================================================${NC}"
-echo -e "  • Shell:    Bash + Starship + Atuin + Zoxide"
-echo -e "  • Editor:   Helix (hx)"
-echo -e "  • Git:      GitUI (gu) + GitHub CLI (gh)"
-echo -e "  • Linker:   Mold (Blazing fast)"
-echo -e "\n${BOLD}Action Required:${NC}"
-echo -e "  1. Run ${BLUE}source ~/.bashrc${NC} to refresh shell."
-echo -e "  2. Run ${BLUE}gh auth login${NC} to connect your GitHub account."
+        if [ -n "$git_name" ] && [ -n "$git_email" ]; then
+            git config --global user.name "$git_name"
+            git config --global user.email "$git_email"
+            log_success "Git identity configured."
+        else
+            log_warn "Skipped Git identity setup."
+        fi
+    fi
+}
+
+cleanup() {
+    log_step "7/7" "Final Cleanup"
+    execute_cmd "Auto-removing unused packages" "sudo apt-get autoremove -y"
+    execute_cmd "Cleaning apt cache" "sudo apt-get clean"
+}
+
+print_summary() {
+    echo -e "\n${GREEN}========================================================${NC}"
+    echo -e "${GREEN}  ✔ SETUP COMPLETE! READY TO CODE.${NC}"
+    echo -e "${GREEN}========================================================${NC}"
+    echo -e "  • Shell:    Bash + Starship + Atuin + Zoxide"
+    echo -e "  • Runtimes: Mise (Node/Python manager)"
+    echo -e "  • Editor:   Helix (hx)"
+    echo -e "  • Git:      GitUI (gu) + GitHub CLI (gh)"
+    echo -e "  • Linker:   Mold (Blazing fast)"
+    echo -e "\n${BOLD}Action Required:${NC}"
+    echo -e "  1. Run ${BLUE}source ~/.bashrc${NC} to refresh shell."
+    echo -e "  2. Run ${BLUE}gh auth login${NC} to connect your GitHub account."
+}
+
+usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo "Options:"
+    echo "  -v, --verbose   Enable verbose output"
+    echo "  -y, --yes       Run non-interactively (skip git setup prompts)"
+    echo "  -h, --help      Show this help message"
+}
+
+# --- Main ---
+
+main() {
+    # Parse Arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -y|--yes)
+                INTERACTIVE=false
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1"
+                usage
+                exit 1
+                ;;
+        esac
+    done
+
+    echo -e "${BOLD}Starting Rust Backend Environment Setup ...${NC}"
+    
+    check_os
+    install_sys_deps
+    install_rust_toolchain
+    install_cargo_binstall
+    install_pro_tools
+    install_mise
+    configure_environment
+    setup_git_identity
+    cleanup
+    print_summary
+}
+
+main "$@"

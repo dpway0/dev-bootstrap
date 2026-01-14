@@ -11,7 +11,7 @@ Optimized for Ubuntu VMs running on Orbstack.
 
 | Profile | Description | Documentation |
 | :--- | :--- | :--- |
-| **Rust Backend** | Ubuntu, Mold Linker, Pure Rust Toolchain | [View Guide](./orbstack/rust-backend/README.md) |
+| **Rust Backend** | Ubuntu, Mold, Helix, Mise, Pure Rust Tools ("Pro") | [View Guide](./orbstack/rust-backend/README.md) |
 
 ## Repository Structure
 
