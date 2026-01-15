@@ -21,6 +21,7 @@ readonly NC='\033[0m' # No Color
 # --- Global Config ---
 INTERACTIVE=true
 VERBOSE=false
+INSTALL_OPTIONAL=false
 
 # --- Error Handling ---
 trap 'err_handler $LINENO "$BASH_COMMAND"' ERR
@@ -81,7 +82,7 @@ check_os() {
 }
 
 install_sys_deps() {
-    log_step "1/7" "System Dependencies & Repositories"
+    log_step "1/8" "System Dependencies & Repositories"
 
     execute_cmd "Updating apt package lists" "sudo apt-get update -y"
 
@@ -109,7 +110,7 @@ install_sys_deps() {
 }
 
 install_rust_toolchain() {
-    log_step "2/7" "Rust Toolchain (Rustup)"
+    log_step "2/8" "Rust Toolchain (Rustup)"
 
     if ! is_installed rustc; then
         execute_cmd "Installing Rust (stable)" "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
@@ -122,7 +123,7 @@ install_rust_toolchain() {
 }
 
 install_cargo_binstall() {
-    log_step "3/7" "Cargo Binstall"
+    log_step "3/8" "Cargo Binstall"
     if ! is_installed cargo-binstall; then
         execute_cmd "Installing cargo-binstall" \
             "curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash"
@@ -132,15 +133,34 @@ install_cargo_binstall() {
 }
 
 install_pro_tools() {
-    log_step "4/7" "Installing 'Pro' Rust Tools"
+    log_step "4/8" "Installing 'Pro' Rust Tools"
     
     local TOOLS="cargo-watch cargo-edit zellij atuin starship zoxide bottom xh gitui git-delta git-cliff fd-find ripgrep eza du-dust bat"
     
     execute_cmd "Installing tools via binstall: $TOOLS" "cargo binstall -y $TOOLS"
 }
 
+install_optional_tools() {
+    log_step "5/8" "Optional Tools"
+
+    local OPTIONAL_TOOLS="wrangler mdbook"
+
+    if [ "$INTERACTIVE" = true ] && [ "$INSTALL_OPTIONAL" = false ]; then
+        read -p "  Install optional tools ($OPTIONAL_TOOLS)? [y/N] " response
+        [[ "$response" =~ ^[yY] ]] && INSTALL_OPTIONAL=true
+    fi
+
+    if [ "$INSTALL_OPTIONAL" = true ]; then
+         # Try binstall, it will fall back to cargo install if needed (though slower)
+         # But for safety/speed with mixed types, we can just let binstall handle it.
+         execute_cmd "Installing optional tools: $OPTIONAL_TOOLS" "cargo binstall -y $OPTIONAL_TOOLS"
+    else
+         log_info "Skipping optional tools."
+    fi
+}
+
 install_mise() {
-    log_step "5/7" "Mise (Runtime Manager)"
+    log_step "6/8" "Mise (Runtime Manager)"
     
     if ! is_installed mise; then
         execute_cmd "Installing Mise (via cargo-binstall)" "cargo binstall -y mise"
@@ -150,7 +170,7 @@ install_mise() {
 }
 
 configure_environment() {
-    log_step "6/7" "Applying Configurations"
+    log_step "7/8" "Applying Configurations"
 
     # Mold Linker
     execute_cmd "Configuring Mold Linker" \
@@ -249,7 +269,7 @@ setup_git_identity() {
 }
 
 cleanup() {
-    log_step "7/7" "Final Cleanup"
+    log_step "8/8" "Final Cleanup"
     execute_cmd "Auto-removing unused packages" "sudo apt-get autoremove -y"
     execute_cmd "Cleaning apt cache" "sudo apt-get clean"
 }
@@ -273,6 +293,7 @@ usage() {
     echo "Options:"
     echo "  -v, --verbose   Enable verbose output"
     echo "  -y, --yes       Run non-interactively (skip git setup prompts)"
+    echo "  --optional      Install optional tools (wrangler, mdbook)"
     echo "  -h, --help      Show this help message"
 }
 
@@ -288,6 +309,10 @@ main() {
                 ;;
             -y|--yes)
                 INTERACTIVE=false
+                shift
+                ;;
+            --optional)
+                INSTALL_OPTIONAL=true
                 shift
                 ;;
             -h|--help)
@@ -309,6 +334,7 @@ main() {
     install_rust_toolchain
     install_cargo_binstall
     install_pro_tools
+    install_optional_tools
     install_mise
     configure_environment
     setup_git_identity
