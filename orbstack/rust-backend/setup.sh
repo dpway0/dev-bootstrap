@@ -140,8 +140,18 @@ install_pro_tools() {
     execute_cmd "Installing tools via binstall: $TOOLS" "cargo binstall -y $TOOLS"
 }
 
+install_mise() {
+    log_step "5/8" "Mise (Runtime Manager)"
+    
+    if ! is_installed mise; then
+        execute_cmd "Installing Mise (via cargo-binstall)" "cargo binstall -y mise"
+    else
+        log_success "Mise is already installed."
+    fi
+}
+
 install_optional_tools() {
-    log_step "5/8" "Optional Tools"
+    log_step "6/8" "Optional Tools"
 
     local OPTIONAL_TOOLS="wrangler mdbook"
 
@@ -151,23 +161,35 @@ install_optional_tools() {
     fi
 
     if [ "$INSTALL_OPTIONAL" = true ]; then
-         # Try binstall, it will fall back to cargo install if needed (though slower)
-         # But for safety/speed with mixed types, we can just let binstall handle it.
-         execute_cmd "Installing optional tools: $OPTIONAL_TOOLS" "cargo binstall -y $OPTIONAL_TOOLS"
+         # mdBook via Cargo
+         if ! is_installed mdbook; then
+             execute_cmd "Installing mdBook" "cargo binstall -y mdbook"
+         else
+             log_success "mdBook is already installed."
+         fi
+
+         # Wrangler via NPM (Mise)
+         # We need to ensure Node is available via Mise first
+         if ! is_installed wrangler; then
+             log_info "Installing Node.js (LTS) via Mise..."
+             # Install Node.js if not present (mise needs to be in path, which binstall puts in ~/.cargo/bin)
+             # We use 'mise use -g' to set it globally for the user
+             if execute_cmd "Installing Node.js via Mise" "mise use --global node@lts"; then
+                  # Now install wrangler using the node we just installed
+                  # We use 'mise exec' to ensure we are using the mise-managed npm
+                  execute_cmd "Installing Wrangler via NPM" "mise exec -- npm install -g wrangler"
+             else
+                  log_error "Failed to install Node.js via Mise. Skipping Wrangler."
+             fi
+         else
+             log_success "Wrangler is already installed."
+         fi
     else
          log_info "Skipping optional tools."
     fi
 }
 
-install_mise() {
-    log_step "6/8" "Mise (Runtime Manager)"
-    
-    if ! is_installed mise; then
-        execute_cmd "Installing Mise (via cargo-binstall)" "cargo binstall -y mise"
-    else
-        log_success "Mise is already installed."
-    fi
-}
+
 
 configure_environment() {
     log_step "7/8" "Applying Configurations"
@@ -334,8 +356,8 @@ main() {
     install_rust_toolchain
     install_cargo_binstall
     install_pro_tools
-    install_optional_tools
     install_mise
+    install_optional_tools
     configure_environment
     setup_git_identity
     cleanup
