@@ -163,7 +163,7 @@ install_optional_tools() {
     if [ "$INSTALL_OPTIONAL" = true ]; then
          # mdBook via Cargo
          if ! is_installed mdbook; then
-             execute_cmd "Installing mdBook" "cargo binstall -y mdbook"
+             execute_cmd "Installing mdBook" "cargo binstall -y mdbook mdbook-admonish hurl"
          else
              log_success "mdBook is already installed."
          fi
