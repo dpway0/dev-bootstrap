@@ -135,7 +135,7 @@ install_cargo_binstall() {
 install_pro_tools() {
     log_step "4/8" "Installing 'Pro' Rust Tools"
     
-    local TOOLS="cargo-watch cargo-edit zellij atuin starship zoxide bottom xh gitui git-delta git-cliff fd-find ripgrep eza du-dust bat"
+    local TOOLS="cargo-watch cargo-edit zellij atuin starship zoxide bottom xh gitui git-delta git-cliff fd-find ripgrep eza du-dust bat just"
     
     execute_cmd "Installing tools via binstall: $TOOLS" "cargo binstall -y $TOOLS"
 }
@@ -147,6 +147,32 @@ install_mise() {
         execute_cmd "Installing Mise (via cargo-binstall)" "cargo binstall -y mise"
     else
         log_success "Mise is already installed."
+    fi
+}
+
+install_nodejs() {
+    log_step "5.5/8" "Node.js (via Mise)"
+    
+    if ! is_installed node; then
+        # Ensure mise is in PATH for the script session
+        export PATH="$HOME/.cargo/bin:$PATH"
+        execute_cmd "Installing Node.js (LTS) via Mise" "mise use --global node@lts"
+    else
+        log_success "Node.js is already installed."
+    fi
+}
+
+install_pnpm() {
+    log_step "5.75/8" "PNPM (via Corepack)"
+    
+    if is_installed node; then
+        if ! is_installed pnpm; then
+            execute_cmd "Installing PNPM via Corepack" "corepack enable && corepack prepare pnpm@latest --activate"
+        else
+            log_success "PNPM is already installed."
+        fi
+    else
+        log_warn "Node.js is not installed. Skipping PNPM installation."
     fi
 }
 
@@ -357,6 +383,8 @@ main() {
     install_cargo_binstall
     install_pro_tools
     install_mise
+    install_nodejs
+    install_pnpm
     install_optional_tools
     configure_environment
     setup_git_identity
