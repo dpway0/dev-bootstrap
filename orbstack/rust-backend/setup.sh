@@ -152,6 +152,7 @@ install_mise() {
 
 install_nodejs() {
     log_step "5.5/8" "Node.js (via Mise)"
+    export PATH="$HOME/.local/share/mise/shims:$PATH"
     
     if ! is_installed node; then
         # Ensure mise is in PATH for the script session
